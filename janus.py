@@ -330,11 +330,6 @@ def main():
     phrase_timeout = args.phrase_timeout
     
     # Load model directly
-    # if args.scam_model == "scamllm": 
-    #     from transformers import AutoTokenizer, AutoModelForSequenceClassification
-    #     tokenizer = AutoTokenizer.from_pretrained("phishbot/ScamLLM")
-    #     scam_model = AutoModelForSequenceClassification.from_pretrained("phishbot/ScamLLM")
-    # else: 
     model_config = dict(
         d_model=256,
         n_layers=4,
@@ -347,7 +342,7 @@ def main():
     n_layers = model_config['n_layers']
 
     scam_model = Janus(**model_config).to(device)
-    scam_model.load_state_dict(torch.load("Janus_256_4.pt"))
+    scam_model.load_state_dict(torch.load("Janus_256_4.pt", map_location=torch.device('cpu')))
     num_params = sum(p.numel() for p in scam_model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {num_params}")
     transcription = ['']
@@ -361,8 +356,8 @@ def main():
         audio: An AudioData containing the recorded bytes.
         """
         # Grab the raw bytes and push it into the thread safe queue.
-        
-        recorder.record(audio)
+        data = audio.get_wav_data()
+        data_queue.put(data)
 
 
     # Create a background thread that will pass us raw audio bytes.
@@ -387,34 +382,13 @@ def main():
                 phrase_time = now
                 
                 # Combine audio data from queue
-                audio_data = b''.join(data_queue.queue)
+                print(len(data_queue.queue))
+                audio_data = b''.join(data_queue.queue) 
                 data_queue.queue.clear()
+                with open("audio_file.wav", "wb") as file:
+                    file.write(audio_data)
                 
-                # Convert in-ram buffer to something the model can use directly without needing a temp file.
-                # Convert data from 16 bit wide integers to floating point with a width of 32 bits.
-                # Clamp the audio stream frequency to a PCM wavelength compatible default of 32768hz max.
-                audio_np = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
-
-                # Read the transcription.
-                if args.scam_model == "scamllm":
-                    result = audio_model.transcribe(audio_np, fp16=torch.cuda.is_available())
-                    text = result['text'].strip()
-
-                    # If we detected a pause between recordings, add a new item to our transcription.
-                    # Otherwise edit the existing one.
-                    if text and phrase_complete:
-                        transcription.append(text)
-                    elif text:
-                        transcription[-1] = text
-                        
-                    is_scam = scam_model(".".join(transcription)) 
-                    for dictionary in is_scam[0]:
-                        if dictionary['label'] == "LABEL_1": 
-                            print("Is scam: ", dictionary['score'])
-                            if dictionary['score'] > 0.6:
-                                print("Scam detected")
-                                
-                else: 
+                
                     
 
                 # Clear the console to reprint the updated transcription.
