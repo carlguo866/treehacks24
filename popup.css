@@ -17,7 +17,7 @@ body {
 .modal-content {
     background-color: #f44336;
     color: white;
-    margin: 25% auto;
+    margin: 25% auto; /* Adjust the margin to vertically center the modal */
     padding: 20px;
     border: 1px solid #888;
     width: 50%;
@@ -35,4 +35,29 @@ body {
     color: black;
     text-decoration: none;
     cursor: pointer;
+}
+
+button {
+    display: inline-block;
+    margin: 10px;
+    padding: 10px 20px;
+    background-color: #4CAF50;
+    color: white;
+    text-align: center;
+    text-decoration: none;
+    display: inline-block;
+    font-size: 16px;
+    cursor: pointer;
+}
+
+#startRecording {
+    background-color: #008CBA;
+    border: none;
+    color: white;
+}
+
+#stopRecording {
+    background-color: #f44336;
+    border: none;
+    color: white;
 }

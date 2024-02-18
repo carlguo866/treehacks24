@@ -36,7 +36,10 @@ document.addEventListener('DOMContentLoaded', function() {
     closeBtn.addEventListener('click', closeModal);
 
     // Start recording when the startRecordingBtn is clicked
+
+    // Add event listener to start recording when the button is clicked
     startRecordingBtn.addEventListener('click', async () => {
+        // Your recording logic here
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             alert('Microphone access is not supported by this browser.');
             return;
@@ -74,10 +77,16 @@ document.addEventListener('DOMContentLoaded', function() {
         const formData = new FormData();
         formData.append('audio', audioBlob);
 
+        const WHISPER_TOKEN = 'Your_Whisper_API_Token'; // Replace with your actual Whisper API token
+
         // Replace 'YOUR_SERVER_ENDPOINT' with your actual server endpoint for processing audio with Whisper
         const response = await fetch('YOUR_SERVER_ENDPOINT', {
             method: 'POST',
-            body: formData,
+            headers: {
+                'Authorization': `Bearer ${WHISPER_TOKEN}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ audio: audioBlob })
         });
 
         if (!response.ok) {
