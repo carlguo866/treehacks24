@@ -3,12 +3,13 @@ document.addEventListener('DOMContentLoaded', function() {
     const stopRecordingBtn = document.getElementById('stopRecording');
     const modal = document.getElementById('modal');
     const closeBtn = document.querySelector('.close');
+    require('dotenv').config();
     let mediaRecorder;
     let audioChunks = [];
 
     // Function to query the ScamLLM model
     async function queryScamLLM(transcribedText) {
-        const API_TOKEN = 'Your_Hugging_Face_API_Token'; // Replace with your actual Hugging Face API token
+        const API_TOKEN = process.env.API_TOKEN; // Replace with your actual Hugging Face API token
         const response = await fetch("https://api-inference.huggingface.co/models/phishbot/ScamLLM", {
             method: "POST",
             headers: {
@@ -74,29 +75,41 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Send audio to the server for transcription with Whisper
     async function sendAudioToServer(audioBlob) {
-        const formData = new FormData();
-        formData.append('audio', audioBlob);
-
-        const WHISPER_TOKEN = 'Your_Whisper_API_Token'; // Replace with your actual Whisper API token
-
-        // Replace 'YOUR_SERVER_ENDPOINT' with your actual server endpoint for processing audio with Whisper
-        const response = await fetch('YOUR_SERVER_ENDPOINT', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${WHISPER_TOKEN}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ audio: audioBlob })
-        });
-
-        if (!response.ok) {
-            console.error('Failed to send audio to server');
-            return;
-        }
-
-        const { transcription } = await response.json();
-        checkForScams(transcription);
+        // Convert Blob to base64 as OpenAI's API might require the audio in base64 format
+        const reader = new FileReader();
+        reader.readAsDataURL(audioBlob);
+        reader.onloadend = async () => {
+            const base64Audio = reader.result.split(',')[1]; // Remove the Data URL part
+    
+            const OPENAI_API_URL = 'https://api.openai.com/v1/whisper'; // Hypothetical URL
+            const OPENAI_API_KEY = process.env.OPENAI_API_KEY; // Securely manage this token
+    
+            try {
+                const response = await fetch(OPENAI_API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: "whisper-1", // Specify the model you wish to use
+                        audio: base64Audio,
+                    }),
+                });
+    
+                if (!response.ok) {
+                    console.error('Failed to transcribe audio with Whisper');
+                    return;
+                }
+    
+                const { text } = await response.json(); // Adjust based on the actual API response
+                console.log(text); // Do something with the transcription
+            } catch (error) {
+                console.error('Error transcribing audio with Whisper:', error);
+            }
+        };
     }
+    
 
     // Check the transcription for potential scams
     async function checkForScams(transcribedText) {
