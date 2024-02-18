@@ -1,27 +1,18 @@
-#! python3.7
 
-import argparse
-import os
+import pyaudio
+import wave
 import numpy as np
-import speech_recognition as sr
-import whisper
+from time import sleep, time
+import torchaudio
 import torch
 
-from datetime import datetime, timedelta
-from queue import Queue
-from transformers import pipeline
-
-from time import sleep
-from sys import platform
 
 import pandas as pd
 import json
 import math
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchaudio
 
 from torch.utils.data import Dataset, DataLoader
 from einops import rearrange, repeat
@@ -31,6 +22,18 @@ from scipy.stats import spearmanr
 dropout_fn = nn.Dropout1d
 torch.backends.cudnn.benchmark = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+FORMAT = pyaudio.paInt16  # Audio format
+CHANNELS = 1              # Number of audio channels
+RATE = 16000              # Bit rate
+TARGET_SAMPLE_RATE = 16000
+CHUNK = 1024              # Number of frames per buffer
+RECORD_SECONDS = 15      # Record duration
+NUM_SAMPLES = 16000 * 15  # Number of samples
+WAVE_OUTPUT_FILENAME = "output.wav"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 
 class RMSNorm(nn.Module):
@@ -268,68 +271,28 @@ class Janus(nn.Module):
         x = self.decoder(x)  # (B, d_model) -> (B, d_output)
 
         return x
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default="medium", help="Model to use",
-                        choices=["tiny", "base", "small", "medium", "large"])
-    parser.add_argument("--scam_model", default="janus", help="Model to use",
-                        choices=["janus", "scamllm"])
-    parser.add_argument("--non_english", action='store_true',
-                        help="Don't use the english model.")
-    parser.add_argument("--energy_threshold", default=1000,
-                        help="Energy level for mic to detect.", type=int)
-    parser.add_argument("--record_timeout", default=2,
-                        help="How real time the recording is in seconds.", type=float)
-    parser.add_argument("--phrase_timeout", default=1,
-                        help="How much empty space between recordings before we "
-                             "consider it a new line in the transcription.", type=float)
     
-    parser.add_argument("--file", default=None, type=str,
-                        help="audiofile to transcribe")
-    if 'linux' in platform:
-        parser.add_argument("--default_microphone", default='pulse',
-                            help="Default microphone name for SpeechRecognition. "
-                                 "Run this with 'list' to view available Microphones.", type=str)
-    args = parser.parse_args()
 
-    # The last time a recording was retrieved from the queue.
-    phrase_time = None
-    # Thread safe Queue for passing data from the threaded recording callback.
-    data_queue = Queue()
-    # We use SpeechRecognizer to record our audio because it has a nice feature where it can detect when speech ends.
-    recorder = sr.Recognizer()
-    recorder.energy_threshold = args.energy_threshold
-    # Definitely do this, dynamic energy compensation lowers the energy threshold dramatically to a point where the SpeechRecognizer never stops recording.
-    recorder.dynamic_energy_threshold = False
-
-    # Prevents permanent application hang and crash by using the wrong Microphone
-    # if 'linux' in platform:
-    mic_name = "MacBook Pro Microphone"
-    if not mic_name or mic_name == 'list':
-        print("Available microphone devices are: ")
-        for index, name in enumerate(sr.Microphone.list_microphone_names()):
-            print(f"Microphone with name \"{name}\" found")
-        return
-    else:
-        for index, name in enumerate(sr.Microphone.list_microphone_names()):
-            if mic_name in name:
-                source = sr.Microphone(sample_rate=16000, device_index=index)
-                break
-    # else:
-    #     print("mac or windows")
-    #     source = sr.Microphone(sample_rate=16000, device_index=2)
-
-    # Load / Download model
-    model = args.model
-    if args.model != "large" and not args.non_english:
-        model = model + ".en"
-    audio_model = whisper.load_model(model)
-
-    record_timeout = args.record_timeout
-    phrase_timeout = args.phrase_timeout
+def get_torchaudio_data(file_path):
+    signal, sr = torchaudio.load(file_path)
+    signal = signal.to(device)
+    if sr != TARGET_SAMPLE_RATE:
+        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=TARGET_SAMPLE_RATE).to(device)
+        signal = resampler(signal)
+    if signal.shape[0] > 1:
+        signal = torch.mean(signal, dim=0, keepdim=True)
+    if signal.shape[1] > NUM_SAMPLES:
+        signal = signal[:, :NUM_SAMPLES]
+    elif signal.shape[1] < NUM_SAMPLES:
+        padding = NUM_SAMPLES - signal.shape[1]
+        signal = torch.cat([signal, torch.zeros(1, padding).to(device)], dim=1)
+    signal = torchaudio.transforms.Spectrogram()(signal)
     
-    # Load model directly
+    return torch.squeeze(signal.permute(0, 2, 1)).to(device)
+    
+def main(): 
+    audio = pyaudio.PyAudio()
+
     model_config = dict(
         d_model=256,
         n_layers=4,
@@ -341,71 +304,52 @@ def main():
     d_model = model_config['d_model']
     n_layers = model_config['n_layers']
 
-    scam_model = Janus(**model_config).to(device)
-    scam_model.load_state_dict(torch.load("Janus_256_4.pt", map_location=torch.device('cpu')))
-    num_params = sum(p.numel() for p in scam_model.parameters() if p.requires_grad)
+    model = Janus(**model_config).to(device)
+    model.load_state_dict(torch.load("Janus_256_4.pt", map_location=torch.device('cpu')))
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Total trainable parameters: {num_params}")
-    transcription = ['']
-
-    with source:
-        recorder.adjust_for_ambient_noise(source)
-
-    def record_callback(_, audio:sr.AudioData) -> None:
-        """
-        Threaded callback function to receive audio data when recordings finish.
-        audio: An AudioData containing the recorded bytes.
-        """
-        # Grab the raw bytes and push it into the thread safe queue.
-        data = audio.get_wav_data()
-        data_queue.put(data)
-
-
-    # Create a background thread that will pass us raw audio bytes.
-    # We could do this manually but SpeechRecognizer provides a nice helper.
-    recorder.listen_in_background(source, record_callback, phrase_time_limit=record_timeout)
-
-    # Cue the user that we're ready to go.
-    print("Model loaded.")
-    print(source.device_index)
-
-    while True:
-        try:
-            now = datetime.utcnow()
-            # Pull raw recorded audio from the queue.
-            if not data_queue.empty():
-                phrase_complete = False
-                # If enough time has passed between recordings, consider the phrase complete.
-                # Clear the current working audio buffer to start over with the new data.
-                if phrase_time and now - phrase_time > timedelta(seconds=phrase_timeout):
-                    phrase_complete = True
-                # This is the last time we received new audio data from the queue.
-                phrase_time = now
-                
-                # Combine audio data from queue
-                print(len(data_queue.queue))
-                audio_data = b''.join(data_queue.queue) 
-                data_queue.queue.clear()
-                with open("audio_file.wav", "wb") as file:
-                    file.write(audio_data)
-                
-                
-                    
-
-                # Clear the console to reprint the updated transcription.
-                os.system('cls' if os.name=='nt' else 'clear')
-                for line in transcription:
-                    print(line)
-                # Flush stdout.
-                print('', end='', flush=True)
     
-                sleep(0.25)
+    
+    # Start recording
+    stream = audio.open(format=FORMAT, channels=CHANNELS,
+                        rate=RATE, input=True,
+                        frames_per_buffer=CHUNK)
+    print("recording...")
+    frames = [] 
+    time_start = time()
+    while True:
+        try: 
+            data = stream.read(CHUNK)
+            frames.append(data)
+            if len(frames) >= RATE / CHUNK * RECORD_SECONDS: 
+                frames = frames[1:]
+                
+            if time() - time_start > 1: 
+                wf = wave.open(WAVE_OUTPUT_FILENAME, 'wb')
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(audio.get_sample_size(FORMAT))
+                wf.setframerate(RATE)
+                wf.writeframes(b''.join(frames))
+                wf.close()
+                
+                data = get_torchaudio_data(WAVE_OUTPUT_FILENAME)
+                data = data.unsqueeze(0)
+                model.eval() 
+                with torch.no_grad():
+                    output = model(data)
+                    print(output.log_softmax(dim=1).exp())
+                time_start = time()
+                    
+                
         except KeyboardInterrupt:
             break
-
-    print("\n\nTranscription:")
-    for line in transcription:
-        print(line)
-
+    print("finished recording")
+    print(len(frames))
+    # Stop recording
+    stream.stop_stream()
+    stream.close()
+    audio.terminate()
+    
 
 if __name__ == "__main__":
     main()

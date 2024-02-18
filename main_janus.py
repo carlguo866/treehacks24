@@ -18,7 +18,7 @@ from torch.utils.data import Dataset, DataLoader
 from einops import rearrange, repeat
 from tqdm.auto import tqdm
 from scipy.stats import spearmanr
-
+import streamlit as st
 dropout_fn = nn.Dropout1d
 torch.backends.cudnn.benchmark = True
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -292,6 +292,7 @@ def get_torchaudio_data(file_path):
     
 def main(): 
     audio = pyaudio.PyAudio()
+    
 
     model_config = dict(
         d_model=256,
@@ -311,44 +312,81 @@ def main():
     
     
     # Start recording
-    stream = audio.open(format=FORMAT, channels=CHANNELS,
+   
+
+
+
+    
+         
+    st.markdown("# Geras")
+    st.markdown("Geras is a AI-powered tool that prevents the elderly from being scammed. We use OpenAI's Whisper API to transcribe the audio and another text classification LLM to detect if the person is being scammed.")
+
+    st.markdown("Let's give it a try. Please click the button below to record.")
+    
+    def record_button():
+        st.write("Recording... Text below:")
+        print("recording...")
+        stream = audio.open(format=FORMAT, channels=CHANNELS,
                         rate=RATE, input=True,
                         frames_per_buffer=CHUNK)
-    print("recording...")
-    frames = [] 
-    time_start = time()
-    while True:
-        try: 
-            data = stream.read(CHUNK)
-            frames.append(data)
-            if len(frames) >= RATE / CHUNK * RECORD_SECONDS: 
-                frames = frames[1:]
-                
-            if time() - time_start > 1: 
-                wf = wave.open(WAVE_OUTPUT_FILENAME, 'wb')
-                wf.setnchannels(CHANNELS)
-                wf.setsampwidth(audio.get_sample_size(FORMAT))
-                wf.setframerate(RATE)
-                wf.writeframes(b''.join(frames))
-                wf.close()
-                
-                data = get_torchaudio_data(WAVE_OUTPUT_FILENAME)
-                data = data.unsqueeze(0)
-                model.eval() 
-                with torch.no_grad():
-                    output = model(data)
-                    print(output.log_softmax(dim=1).exp())
-                time_start = time()
+        frames = [] 
+        time_start = time()
+        og_time = time() 
+        while True:
+            try: 
+                if break_loop:
+                    break
+                data = stream.read(CHUNK, exception_on_overflow = False)
+                frames.append(data)
+                if len(frames) >= RATE / CHUNK * RECORD_SECONDS: 
+                    frames = frames[1:]
                     
-                
-        except KeyboardInterrupt:
-            break
+                if time() - time_start > 1: 
+                    wf = wave.open(WAVE_OUTPUT_FILENAME, 'wb')
+                    wf.setnchannels(CHANNELS)
+                    wf.setsampwidth(audio.get_sample_size(FORMAT))
+                    wf.setframerate(RATE)
+                    wf.writeframes(b''.join(frames))
+                    wf.close()
+                    
+                    data = get_torchaudio_data(WAVE_OUTPUT_FILENAME)
+                    data = data.unsqueeze(0)
+                    model.eval() 
+                    with torch.no_grad():
+                        output = model(data)
+                        score = output.log_softmax(dim=1).exp().argmax(dim=1)
+                        if time() - og_time > 6:
+                            st.write("Is scam: ", score)
+                            if score > 0.5:
+                                st.markdown(f"<h1 style='color: red;'>Scam detected</h1>", unsafe_allow_html=True)
+
+                            
+                    time_start = time()
+                        
+                    
+            except KeyboardInterrupt:
+                break
+            stream.stop_stream()
+            stream.close()
+            audio.terminate()
+    break_loop = False
+    def stop_button():
+        st.write("Stopped recording.")
+        break_loop = True
+        print_info = False
+        refreshable_box.empty()
+        return
+    
+    st.button('Record', on_click=record_button) 
+    
+    st.button("Stop", on_click=stop_button)
+
+
+
+    
     print("finished recording")
-    print(len(frames))
     # Stop recording
-    stream.stop_stream()
-    stream.close()
-    audio.terminate()
+
     
 
 if __name__ == "__main__":

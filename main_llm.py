@@ -7,13 +7,12 @@ import torch
 
 from datetime import datetime, timedelta
 from queue import Queue
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-
+from transformers import pipeline
 
 from time import sleep
 from sys import platform
 
-
+import streamlit as st
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="medium", help="Model to use",
@@ -35,6 +34,8 @@ def main():
                             help="Default microphone name for SpeechRecognition. "
                                  "Run this with 'list' to view available Microphones.", type=str)
     args = parser.parse_args()
+    
+
 
     # The last time a recording was retrieved from the queue.
     phrase_time = None
@@ -65,9 +66,7 @@ def main():
     record_timeout = args.record_timeout
     phrase_timeout = args.phrase_timeout
     
-
-    tokenizer = AutoTokenizer.from_pretrained("phishbot/ScamLLM")
-    scam_model = AutoModelForSequenceClassification.from_pretrained("phishbot/ScamLLM")
+    scam_model = pipeline(task="text-classification", model="phishbot/ScamLLM", top_k=None)
     transcription = ['']
 
     with source:
@@ -90,9 +89,35 @@ def main():
     # Cue the user that we're ready to go.
     print("Model loaded.")
     print(source.device_index)
+    
+    st.markdown("# Geras")
+    st.markdown("Geras is a AI-powered tool that prevents the elderly from being scammed. We use OpenAI's Whisper API to transcribe the audio and another text classification LLM to detect if the person is being scammed.")
+
+    st.markdown("Let's give it a try. Please click the button below to record.")
+
+    # print_info = False
+    def record_button():
+        st.write("Recording... Text below:")
+        print_info = True
+        transcription.clear()
+    break_loop = False
+    def stop_button():
+        st.write("Stopped recording.")
+        break_loop = True
+        print_info = False
+        refreshable_box.empty()
+        return
+    
+    st.button('Record', on_click=record_button) 
+    
+    st.button("Stop", on_click=stop_button)
+
+    refreshable_box = st.empty()
 
     while True:
         try:
+            if break_loop: 
+                break
             now = datetime.utcnow()
             # Pull raw recorded audio from the queue.
             if not data_queue.empty():
@@ -119,25 +144,31 @@ def main():
 
                 # If we detected a pause between recordings, add a new item to our transcription.
                 # Otherwise edit the existing one.
+                # if print_info:
                 if text and phrase_complete:
                     transcription.append(text)
                 elif text:
                     transcription[-1] = text
 
                 # Clear the console to reprint the updated transcription.
-                os.system('cls' if os.name=='nt' else 'clear')
-                for line in transcription:
-                    print(line)
-                # Flush stdout.
-                print('', end='', flush=True)
+                with refreshable_box.container(): 
+                    for line in transcription:
+                        st.write(line)
+                    # Flush stdout.
+                    # print('', end='', flush=True)
 
-                # Infinite loops are bad for processors, must sleep.
-                is_scam = scam_model(".".join(transcription)) 
-                for dictionary in is_scam[0]:
-                    if dictionary['label'] == "LABEL_1": 
-                        print("Is scam: ", dictionary['score'])
-                        if dictionary['score'] > 0.6:
-                            print("Scam detected")
+                    # Infinite loops are bad for processors, must sleep.
+                    # inputs = ".".join(transcription) 
+                    # if len(inputs) > 520: 
+                    #     inputs = inputs[len(inputs) - 520:]
+                    is_scam = scam_model(".".join(transcription) ) 
+                    for dictionary in is_scam[0]:
+                        if dictionary['label'] == "LABEL_1": 
+                            # if print_info:
+                                st.write("Is scam: ", dictionary['score'])
+                                if dictionary['score'] > 0.6:
+                                    st.markdown(f"<h1 style='color: red;'>Scam detected</h1>", unsafe_allow_html=True)
+
                 sleep(0.25)
         except KeyboardInterrupt:
             break
