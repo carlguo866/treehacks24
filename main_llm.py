@@ -57,6 +57,9 @@ def main():
                 source = sr.Microphone(sample_rate=16000, device_index=index)
                 break
 
+    if 'clicked' not in st.session_state:
+        st.session_state['clicked'] = False
+
     # Load / Download model
     model = args.model
     if args.model != "large" and not args.non_english:
@@ -96,26 +99,25 @@ def main():
     st.markdown("Let's give it a try. Please click the button below to record.")
 
     # print_info = False
+
+    refreshable_box = st.empty()
     def record_button():
         st.write("Recording... Text below:")
-        print_info = True
-        transcription.clear()
+        st.session_state.clicked = True
+
     break_loop = False
     def stop_button():
         st.write("Stopped recording.")
         break_loop = True
-        print_info = False
+        st.session_state.clicked = False
         refreshable_box.empty()
         return
     
     st.button('Record', on_click=record_button) 
-    
     st.button("Stop", on_click=stop_button)
-
-    refreshable_box = st.empty()
-
     while True:
         try:
+            
             if break_loop: 
                 break
             now = datetime.utcnow()
@@ -144,11 +146,11 @@ def main():
 
                 # If we detected a pause between recordings, add a new item to our transcription.
                 # Otherwise edit the existing one.
-                # if print_info:
-                if text and phrase_complete:
-                    transcription.append(text)
-                elif text:
-                    transcription[-1] = text
+                if st.session_state.clicked:
+                    if text and phrase_complete:
+                        transcription.append(text)
+                    elif text:
+                        transcription[-1] = text
 
                 # Clear the console to reprint the updated transcription.
                 with refreshable_box.container(): 

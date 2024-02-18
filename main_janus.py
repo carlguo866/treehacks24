@@ -323,58 +323,21 @@ def main():
 
     st.markdown("Let's give it a try. Please click the button below to record.")
     
+    if 'clicked' not in st.session_state:
+        st.session_state['clicked'] = False
+    
     def record_button():
         st.write("Recording... Text below:")
         print("recording...")
-        stream = audio.open(format=FORMAT, channels=CHANNELS,
-                        rate=RATE, input=True,
-                        frames_per_buffer=CHUNK)
-        frames = [] 
-        time_start = time()
-        og_time = time() 
-        while True:
-            try: 
-                if break_loop:
-                    break
-                data = stream.read(CHUNK, exception_on_overflow = False)
-                frames.append(data)
-                if len(frames) >= RATE / CHUNK * RECORD_SECONDS: 
-                    frames = frames[1:]
-                    
-                if time() - time_start > 1: 
-                    wf = wave.open(WAVE_OUTPUT_FILENAME, 'wb')
-                    wf.setnchannels(CHANNELS)
-                    wf.setsampwidth(audio.get_sample_size(FORMAT))
-                    wf.setframerate(RATE)
-                    wf.writeframes(b''.join(frames))
-                    wf.close()
-                    
-                    data = get_torchaudio_data(WAVE_OUTPUT_FILENAME)
-                    data = data.unsqueeze(0)
-                    model.eval() 
-                    with torch.no_grad():
-                        output = model(data)
-                        score = output.log_softmax(dim=1).exp().argmax(dim=1)
-                        if time() - og_time > 6:
-                            st.write("Is scam: ", score)
-                            if score > 0.5:
-                                st.markdown(f"<h1 style='color: red;'>Scam detected</h1>", unsafe_allow_html=True)
-
-                            
-                    time_start = time()
-                        
-                    
-            except KeyboardInterrupt:
-                break
-            stream.stop_stream()
-            stream.close()
-            audio.terminate()
+        st.session_state.clicked = True 
+        
     break_loop = False
     def stop_button():
         st.write("Stopped recording.")
         break_loop = True
         print_info = False
-        refreshable_box.empty()
+        st.session_state.clicked = False
+        
         return
     
     st.button('Record', on_click=record_button) 
@@ -382,7 +345,52 @@ def main():
     st.button("Stop", on_click=stop_button)
 
 
+    stream = audio.open(format=FORMAT, channels=CHANNELS,
+                        rate=RATE, input=True,
+                        frames_per_buffer=CHUNK)
+    frames = [] 
+    time_start = time()
+    og_time = time() 
+    while True:
+        try: 
+            if break_loop:
+                break
+            
+            if not st.session_state.clicked: 
+                continue
+            data = stream.read(CHUNK, exception_on_overflow = False)
+            frames.append(data)
+            if len(frames) >= RATE / CHUNK * RECORD_SECONDS: 
+                frames = frames[1:]
+                
+            if time() - time_start > 1: 
+                wf = wave.open(WAVE_OUTPUT_FILENAME, 'wb')
+                wf.setnchannels(CHANNELS)
+                wf.setsampwidth(audio.get_sample_size(FORMAT))
+                wf.setframerate(RATE)
+                wf.writeframes(b''.join(frames))
+                wf.close()
+                
+                data = get_torchaudio_data(WAVE_OUTPUT_FILENAME)
+                data = data.unsqueeze(0)
+                model.eval() 
+                with torch.no_grad():
+                    output = model(data)
+                    score = output.log_softmax(dim=1).exp().argmax(dim=1)
+                    if time() - og_time > 6:
+                        st.write("Is scam: ", score)
+                        if score > 0.5:
+                            st.markdown(f"<h1 style='color: red;'>Scam detected</h1>", unsafe_allow_html=True)
 
+                        
+                time_start = time()
+                    
+                
+        except KeyboardInterrupt:
+            break
+        stream.stop_stream()
+        stream.close()
+        audio.terminate()
     
     print("finished recording")
     # Stop recording
